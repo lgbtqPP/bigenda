@@ -1,65 +1,69 @@
-# Licensed under WTFPL
+# Licensed under WTFPLv3.1
+#
+#           DO WHAT THE FUCK YOU WANT TO PUBLIC LICENCE
+# TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+#
+# 0. You just DO WHAT THE FUCK YOU WANT TO.
+#
 
-import sims4.commands
-import sims.gender_preference
+from functools import wraps
+from inspect import ismethod
+from typing import Any, Callable
 
+from server_commands.argument_helpers import (OptionalTargetParam, get_optional_target)
+from sims.aging.aging_mixin import AgingMixin
+from sims.gender_preference import GenderPreferenceOp
 from sims.sim_info import SimInfo
 
-from server_commands.argument_helpers import (OptionalTargetParam,
-                                              get_optional_target)
-
-from sims4communitylib.mod_support.common_mod_info import CommonModInfo
-
-from sims4communitylib.utils.common_injection_utils import CommonInjectionUtils
-
-from sims4communitylib.events.event_handling.common_event_registry import CommonEventRegistry
-from sims4communitylib.events.sim.events.sim_loaded import S4CLSimLoadedEvent
-from sims4communitylib.events.sim.events.sim_changed_age import S4CLSimChangedAgeEvent
+import sims4.commands
 
 
-#####
-# Setup mod information
-class ModInfo(CommonModInfo):
-    _FILE_PATH: str = str(__file__)
+class Wrapper:
+    """
+    Helpers for wrapping class functions with custom code
+    """
+    @staticmethod
+    def _wrap_helper(target_function, wrapper_function: Callable[..., Any]) -> Any:
+        @wraps(target_function)
+        def _wrapped_function(*args, **kwargs):
+            if type(target_function) is property:
+                return wrapper_function(target_function.fget, *args, **kwargs)
+            return wrapper_function(target_function, *args, **kwargs)
 
-    @property
-    def _name(self) -> str:
-        return 'bigenda'
+        if ismethod(target_function):
+            return classmethod(_wrapped_function)
+        elif type(target_function) is property:
+            return property(_wrapped_function)
+        return _wrapped_function
 
-    @property
-    def _author(self) -> str:
-        return 'lgbtqPP'
+    @staticmethod
+    def wrap(target_object: Any, target_function_name: str) -> Callable:
+        def _wrap(wrapper_function) -> Any:
+            target_function = getattr(target_object, str(target_function_name))
+            setattr(target_object, str(target_function_name),
+                    Wrapper._wrap_helper(target_function, wrapper_function))
+            return wrapper_function
 
-    @property
-    def _base_namespace(self) -> str:
-        return 'bigenda'
-
-    @property
-    def _file_path(self) -> str:
-        return ModInfo._FILE_PATH
-
-    @property
-    def _version(self) -> str:
-        return '1.2'
+        return _wrap
 
 
-#####
-# Maintenance helper function
-def BIGENDA_maintain(sim_info: SimInfo = None) -> bool:
-    if sim_info is None:
-        return False
-    for (gender,
-         gender_preference_statistic) in sim_info.get_gender_preferences_gen():
-        gender_preference_statistic.add_value(200)
-    return True
+class BIGENDA:
+    """
+     Change all the sims in the game to be bisexual and keep them that way.
+    """
+    @staticmethod
+    def maintain(sim_info: SimInfo = None) -> bool:
+        if sim_info is None:
+            return False
+        for (gender, gender_preference_statistic) in sim_info.get_gender_preferences_gen():
+            gender_preference_statistic.add_value(200)
+        return True
 
 
 #####
 # Live mode command
-@sims4.commands.Command('bigenda.get_genderprefs',
-                        command_type=sims4.commands.CommandType.Live)
-def BIGENDA_get_genderprefs(opt_sim: OptionalTargetParam = None,
-                            _connection=None) -> bool:
+@sims4.commands.Command('bigenda.get_genderprefs', command_type=sims4.commands.CommandType.Live)
+def bigenda_get_genderprefs(opt_sim: OptionalTargetParam = None, _connection=None) -> bool:
     sim = get_optional_target(opt_sim, _connection)
     output = sims4.commands.CheatOutput(_connection)
     for gender, gstat in sim.sim_info.get_gender_preferences_gen():
@@ -69,22 +73,23 @@ def BIGENDA_get_genderprefs(opt_sim: OptionalTargetParam = None,
 
 #####
 # Injections
-@CommonInjectionUtils.inject_safely_into(
-    ModInfo.get_identity(), sims.gender_preference.GenderPreferenceOp, sims.
-    gender_preference.GenderPreferenceOp._apply_to_subject_and_target.__name__)
-def BIGENDA_inject(original, self, subject, target, resolver):
-    original(self, subject, target, resolver)
-    BIGENDA_maintain(subject)
-    BIGENDA_maintain(target)
+@Wrapper.wrap(GenderPreferenceOp, GenderPreferenceOp._apply_to_subject_and_target.__name__)
+def bigenda_inject(original, self, subject, target, resolver) -> Any:
+    result = original(self, subject, target, resolver)
+    BIGENDA.maintain(subject)
+    BIGENDA.maintain(target)
+    return result
 
 
-#####
-# Event handlers
-@CommonEventRegistry.handle_events(ModInfo.get_identity())
-def BIGENDA_on_loaded(event_data: S4CLSimLoadedEvent) -> bool:
-    return BIGENDA_maintain(event_data.sim_info)
+@Wrapper.wrap(SimInfo, SimInfo.load_sim_info.__name__)
+def bigenda_on_loaded(original, self, *args, **kwargs) -> Any:
+    result = original(self, *args, **kwargs)
+    BIGENDA.maintain(self)
+    return result
 
 
-@CommonEventRegistry.handle_events(ModInfo.get_identity())
-def BIGENDA_on_aged(event_data: S4CLSimChangedAgeEvent) -> bool:
-    return BIGENDA_maintain(event_data.sim_info)
+@Wrapper.wrap(AgingMixin, AgingMixin.change_age.__name__)
+def bigenda_on_aged(original, self, *args, **kwargs) -> Any:
+    result = original(self, *args, **kwargs)
+    BIGENDA.maintain(self)
+    return result
